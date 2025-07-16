@@ -1,2 +1,2 @@
-# Omics_YM2
+# Omics_YM
 R code for metabolomic and proteomic data analysis
