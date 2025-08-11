@@ -1,0 +1,389 @@
+---
+title: "HFD - STR Metabolites"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE,warnings=F,error = F)
+
+library(ggplot2)
+library(ggforce)
+library(limma)
+library(dplyr)
+library(ggrepel)
+library(imputeLCMD)
+library(ggsci)
+library(factoextra)
+library(emmeans)
+library(patchwork)
+library(pheatmap)
+library(brglm2)
+library(readxl)
+
+#Convenience function for plotting the volcano plot and saving the results
+plot_table_save = function(data){
+  data$Compound = rownames(data)
+  data$Significant = ifelse(data$adj.P.Val<0.05,"Significant","NS")
+  data$label = ifelse(data$Significant == "NS","",data$Compound)
+  data$Direction = ifelse(data$logFC>0,"Up regulated","Down regulated")
+  data$Direction[data$Significant=="NS"] = "NS"
+  
+  volc = ggplot(data,aes(x=logFC,y=-log10(adj.P.Val),color=Direction))+geom_point()+ theme_bw(base_size = 20, base_family = "Arial") +facet_wrap(~Contrast)+geom_text_repel(data = data[data$label!= "",] ,aes(label=Compound))+scale_color_manual(values = c("Up regulated"="red","Down regulated" = "darkgreen","NS" = "grey")) + ggtitle(data$Contrast)
+  #Specific limits for two datasets
+  if(file == "MC00422_Plasma_metabolites.csv"){
+    volc = volc +
+      scale_x_continuous(breaks = c(seq(-4, 4, 2)),limits = c(-4, 4))+
+      scale_y_continuous(breaks = c(seq(0, 3, 1)),limits = c(0, 3))
+    
+  } else if(file == "MC00470_STR_metabolites.csv"){
+    
+   volc = volc + 
+     scale_x_continuous(breaks = c(seq(-2, 3, 2)),limits = c(-2, 3))+
+     scale_y_continuous(breaks = c(seq(0, 5, 1)),limits = c(0, 5))
+     
+  } else {
+  
+    volc = volc + 
+      scale_x_continuous(breaks = c(seq(-4, 4, 2)),limits = c(-4, 4))+
+      scale_y_continuous(breaks = c(seq(0, 8, 1)),limits = c(0, 8))
+    
+  }
+  print(volc)
+  
+  ggsave(plot = volc,path=paste0(gsub("\\..*","", file)),filename = paste0(make.names(data$Contrast[1]),"_volcano.png"),create.dir = T,height=8,width=10)
+  print("\n")
+
+knitr::kable(data[data$adj.P.Val<1,],row.names = F,digits = 4)
+
+  write.csv(data,file =paste0(gsub("\\..*","", file),"/",make.names(data$Contrast[1]),"_results.csv") )  
+  
+}
+
+#Plots top 20 boxplots
+plot_differences = function(df,level="Pooled"){
+  plot.df = reshape2::melt(df[,colnames(df) %in% c("Geno","Diet",rownames(tops.all)[1:20])],id.vars=c("Geno","Diet"))
+  title = "Boxplots of Compounds with largest differences"
+
+  print(ggplot( plot.df,aes(x = Geno,y=value,color=Diet)) +geom_boxplot(position = position_dodge()) +
+          facet_wrap(~variable,scales="free_y")+theme_bw(16)+scale_color_aaas()+ggtitle(title))
+
+  ggsave(path=paste0(gsub("\\..*","", file)),filename = paste0(level,"_top_boxplot.png"),create.dir = T)
+  
+}
+ 
+```
+
+
+# Section {.tabset}
+
+## Read in data {.tabset}
+
+```{r, include=F}
+
+setwd("/varidata/research/projects/bbc/research/MOOD_yue_MS_template_VBCS1110")
+
+file = "MC00470_lung_metabolites.csv"
+
+## Please select the path to the data file you want to analyze
+data = read.csv(file,header=T)
+
+
+## Update the file path for the Excel file with Sex info, this will need to  be merged into these files since the MS files don't seem to have sex info
+meta = subset(readxl::read_excel("MC00470_sex inf.xlsx",sheet=3,skip=1),select=c('Core ID','Condition 3'))
+colnames(meta) = c("ID","Sex")
+meta$ID = paste0("S",meta$ID)
+meta$Sex = toupper(meta$Sex)
+colnames(data)[1] = "Sample"
+
+# This line makes all of the compound variables numeric, sometimes they read in as characters
+data[,2:ncol(data)] <- sapply( data[,2:ncol(data)], as.numeric)
+
+if(any(grepl("blank",tolower(data$Sample),fixed=T))){
+  # Now we'll do blank filtering
+  # Start by making a data.frame of just the blank which we'll use for subtraction
+  blank = log2(data[grepl("blank",tolower(data$Sample),fixed=T),-1])
+  
+  #Make all missing and -Inf values 0 for the purposes of easily checking for > 3 fold difference
+  blank[which(apply(blank,2,function(x) sum(is.finite(x)))<1)] = 0
+  
+  #Subtract actual values from blank values, both on the log2 scale
+  diff = as.data.frame(t(log2(t(data[,2:ncol(data)])) - as.vector(t(blank))))
+  
+  #Any difference that is less than 3 fold, make missing
+  data[,2:ncol(data)][which(diff < log2(3),arr.ind=T)] = NA
+}
+
+#remove QC and process blanks
+data = data[! (grepl("qc",tolower(data$Sample),fixed=T) |grepl("blank",tolower(data$Sample),fixed=T)) , ]
+
+Molecule = colnames(data)[2:ncol(data)]
+
+# Looking for diet, genotypes; where is the sex information?
+
+data$Geno = tolower(gsub("-.*","", sapply(strsplit(data$Sample,"_"), function(x) x[2])))
+data$Geno = factor(data$Geno,levels=c("wt","ki"),labels = c("WT/WT","KI/KI"))
+data$Diet = gsub(".*-","", sapply(strsplit(data$Sample,"_"), function(x) x[2]))
+data$Diet = factor(data$Diet,levels=c("LFD","HFD"),labels=c("Con.diet","HFD"))
+data$Geno_Diet =  paste0(data$Geno,"_",data$Diet)
+
+data$ID = gsub("_.*","",data$Sample)
+```
+
+```{r}
+
+data$Sample = paste0(sapply(strsplit(data$Sample,"_"), function(x) x[1]),"_",
+                     data$Geno_Diet,"_",
+                     sapply(strsplit(data$Sample,"_"), function(x) x[3]))
+
+data = left_join(data,meta,by="ID")
+
+
+table(data$Geno,data$Diet,data$Sex)
+
+data = subset(data, select= - c(Geno_Diet))
+
+
+```
+
+
+
+### Missingness
+
+Here we create a heatmap of missingness to see if it specific to any group of interest (Diet, Genotype). If there is any specificity, you would see very clear clustering blocks. If nothing shows up, there were no missing values
+
+
+```{r, fig.height = 9,fig.width=9}
+#Replace 0s with NA
+data[data==0]=NA
+
+miss.df = data
+rownames(miss.df) = miss.df$Sample
+miss.df = miss.df[,colnames(miss.df) %in% Molecule]
+miss.df[!is.na(miss.df)] = 1
+miss.df[is.na(miss.df)] = 0
+
+missing = apply(miss.df,2, function(x) sum(x)/length(x))
+anno = data.frame(Genotype = data$Geno,Diet = data$Diet,Sex=data$Sex)
+rownames(anno) = rownames(miss.df)
+
+if( length(which(missing<0.95)) > 0){
+  pheatmap(t(miss.df[,which(missing<0.95)
+  ]),color=c("white","black"),annotation_col = anno)
+}
+
+```
+
+
+### Testing for specificity
+
+There are not enough samples to really startify by sex and test for specificty, so this analysis only adjusts for sex
+
+```{r, include=F}
+
+miss.df$Geno = data$Geno
+miss.df$Diet = data$Diet
+miss.df$Sex = data$Sex
+colnames(miss.df) = make.names(colnames(miss.df))
+res.diet=NULL
+res.geno=NULL
+res.delta.delta=NULL
+
+for(i in colnames(miss.df[,which(missing<0.95)])){
+  
+  f=as.formula(paste0(i,"~ Diet*Geno"))
+  fit = glm(f, data = miss.df, family = "binomial", method = brglmFit)
+  
+  res.diet = rbind(res.diet,data.frame(Compound = i,summary(emmeans(fit,pairwise~Diet|Geno,adjust="none")$contrasts)))
+  
+  res.geno = rbind(res.geno,data.frame(Compound = i,summary(emmeans(fit,pairwise~Geno|Diet,adjust="none")$contrasts)))
+  
+  res.delta.delta = rbind(res.delta.delta,data.frame(Compound = i,joint_tests(fit)[3,]))
+  res.delta.delta$model.term = "Delta - Delta"
+
+}
+
+
+res.geno$FDR = p.adjust(res.geno$p.value,method="BH")
+
+res.diet$FDR = p.adjust(res.diet$p.value,method="BH")
+
+res.delta.delta$FDR = p.adjust(res.delta.delta$p.value,method="BH")
+
+
+
+```
+
+#### If rows are empty or nothing is showing, no specificty was detected
+
+```{r}
+
+if(length(colnames(miss.df[,which(missing<0.95)]))>0){
+
+  knitr::kable(res.diet[res.diet$FDR < 0.1,],caption="Compounds specific to a Diet")
+  knitr::kable(res.geno[res.geno$FDR < 0.1,],caption="Compounds specific to a Genotype")
+  knitr::kable(res.delta.delta[res.delta.delta$FDR < 0.1,],caption="Compounds specific to a Diet/Genotype Combo")
+}
+
+
+```
+
+### Removed for too much missgingness
+
+```{r}
+
+#These compounds are being removed for excessive missingness
+knitr::kable(names(missing[missing<0.3]))
+
+#drop heavily missing data (>30%)
+data = data[, ! colnames(data) %in% names(missing[missing<0.3])]
+
+```
+
+
+```{r}
+
+#impute
+data[,colnames(data) %in% Molecule] = t(imputeLCMD::impute.QRILC(log2(t(data[,colnames(data) %in% Molecule])))[[1]])
+
+```
+
+## Exploratory {.tabset}
+### PCA
+
+```{r, fig.height=6,fig.width=16}
+
+pc.plot = function(df){
+  pc = prcomp(data.matrix(df[,colnames(df) %in% Molecule]))
+  pc.df = as.data.frame(pc$x)
+  pc.df$Genotype = df$Geno
+  pc.df$Diet = df$Diet
+  
+  p1 = ggplot(pc.df,aes(x=PC1,y=PC2,color = Diet,shape=Genotype, linetype=Genotype )) +
+    geom_point() +
+    geom_mark_ellipse() +
+    theme_bw(12) +
+    scale_color_nejm()
+
+  p2 = ggplot(pc.df,aes(x=PC3,y=PC4,color = Diet,shape=Genotype, linetype=Genotype )) +
+    geom_point() +
+    geom_mark_ellipse() +
+    theme_bw(12) +
+    scale_color_nejm()
+
+  p3 = ggplot(pc.df,aes(x=PC5,y=PC6,color = Diet,shape=Genotype, linetype=Genotype )) +
+    geom_point() +
+    geom_mark_ellipse() +
+    theme_bw(12) +
+    scale_color_nejm()
+
+  print(p1+p2+p3)
+
+}
+
+pc.pool = pc.plot(data) +  plot_annotation('Pooled Sexes',theme=theme(plot.title=element_text(hjust=0.5)))
+
+
+```
+
+
+
+### Heatmap {.tabset}
+#### Pooled
+
+```{r, fig.width=9,fig.height=25}
+
+anno = data.frame(Genotype = data$Geno, data$Diet,Sex = data$Sex)
+rownames(anno) = data$Sample
+rownames(data) = data$Sample
+pheatmap(t(log2(data[,colnames(data) %in% Molecule])),
+         annotation_col = anno,
+         scale="row",
+         color=colorRampPalette(c("blue","white","red"))(100))
+
+
+```
+
+
+## Differntial Abundance {.tabset}
+
+### Pooled {.tabset}
+
+```{r, fig.height=14,fig.width=14}
+#We have to drop the slashes to make syntacically correct names
+data$Geno_Diet =  gsub(".*/","",paste0(data$Geno,"_",data$Diet))
+
+design = model.matrix(~ 0 + Geno_Diet + Sex, data= data)
+fit <- lmFit(t(data[,colnames(data) %in% Molecule]), design, robust = TRUE)
+
+cont2 = makeContrasts( Geno_DietKI_HFD - Geno_DietWT_HFD ,
+                       Geno_DietKI_Con.diet- Geno_DietWT_Con.diet,
+                       Geno_DietKI_HFD - Geno_DietKI_Con.diet,
+                       Geno_DietWT_HFD - Geno_DietWT_Con.diet,
+                       levels = design)
+set.seed(777)
+fit.cont <- contrasts.fit(fit, contrasts = cont2) 
+set.seed(777)
+ebayesf <- eBayes(fit.cont, robust = T, trend = T)
+tops.sig = topTable(ebayesf, adjust.method = "BH", p.value = 0.05, number = Inf)
+tops.all = topTable(ebayesf, adjust.method = "BH", p.value = 1, number = Inf)
+```
+
+#### HFD KI - HFD WT
+
+```{r, fig.height=9,fig.width=9}
+
+hfd.df = data.frame(Contrast = "KI/KI HFD vs WT/WT HFD", topTable(ebayesf, adjust.method = "BH", p.value = 1, number = Inf,coef=1))
+
+plot_table_save(hfd.df)
+
+```
+
+
+#### LFD KI - HFD WT
+
+```{r, fig.height=9,fig.width=9}
+
+lfd.df = data.frame(Contrast = "KI/KI_Con.diet vs WT/WT_Con.diet", topTable(ebayesf, adjust.method = "BH", p.value = 1, number = Inf,coef=2))
+plot_table_save(lfd.df)
+
+
+```
+
+
+####  KI/KI HFD - KI/KI_Con.diet
+
+```{r, fig.height=9,fig.width=9}
+
+kihl.df = data.frame(Contrast = "KI/KI HFD vs KI/KI_Con.diet", topTable(ebayesf, adjust.method = "BH", p.value = 1, number = Inf,coef=4))
+
+plot_table_save(kihl.df)
+
+
+```
+
+
+####  WT/WT HFD - WT/WT_Con.diet
+
+```{r, fig.height=9,fig.width=9}
+
+wthl.df = data.frame(Contrast = "WT/WT HFD vs WT/WT_Con.diet", topTable(ebayesf, adjust.method = "BH", p.value = 1, number = Inf,coef=4))
+
+plot_table_save(wthl.df)
+
+
+```
+
+
+
+#### Boxplots Top Compounds
+
+```{r, fig.height=12,fig.width=16}
+
+ 
+plot_differences(data,"Pooled")
+
+
+```
+
