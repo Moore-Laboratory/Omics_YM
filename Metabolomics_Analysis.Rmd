@@ -311,7 +311,7 @@ pheatmap(t(log2(data[,colnames(data) %in% Molecule])),
 ### Pooled {.tabset}
 
 ```{r, fig.height=14,fig.width=14}
-#We have to drop the slashes to make syntacically correct names
+#We have to drop the slashes to make syntactically correct names
 data$Geno_Diet =  gsub(".*/","",paste0(data$Geno,"_",data$Diet))
 
 design = model.matrix(~ 0 + Geno_Diet + Sex, data= data)
@@ -319,8 +319,8 @@ fit <- lmFit(t(data[,colnames(data) %in% Molecule]), design, robust = TRUE)
 
 cont2 = makeContrasts( Geno_DietKI_HFD - Geno_DietWT_HFD ,
                        Geno_DietKI_Con.diet- Geno_DietWT_Con.diet,
-                       Geno_DietKI_HFD - Geno_DietKI_Con.diet,
                        Geno_DietWT_HFD - Geno_DietWT_Con.diet,
+                       Geno_DietKI_HFD - Geno_DietKI_Con.diet,
                        levels = design)
 set.seed(777)
 fit.cont <- contrasts.fit(fit, contrasts = cont2) 
@@ -341,12 +341,24 @@ plot_table_save(hfd.df)
 ```
 
 
-#### LFD KI - HFD WT
+#### Con.diet KI - Con.diet WT
 
 ```{r, fig.height=9,fig.width=9}
 
 lfd.df = data.frame(Contrast = "KI/KI_Con.diet vs WT/WT_Con.diet", topTable(ebayesf, adjust.method = "BH", p.value = 1, number = Inf,coef=2))
 plot_table_save(lfd.df)
+
+
+```
+
+
+####  WT/WT HFD - WT/WT_Con.diet
+
+```{r, fig.height=9,fig.width=9}
+
+wthl.df = data.frame(Contrast = "WT/WT HFD vs WT/WT_Con.diet", topTable(ebayesf, adjust.method = "BH", p.value = 1, number = Inf,coef=3))
+
+plot_table_save(wthl.df)
 
 
 ```
@@ -363,17 +375,6 @@ plot_table_save(kihl.df)
 
 ```
 
-
-####  WT/WT HFD - WT/WT_Con.diet
-
-```{r, fig.height=9,fig.width=9}
-
-wthl.df = data.frame(Contrast = "WT/WT HFD vs WT/WT_Con.diet", topTable(ebayesf, adjust.method = "BH", p.value = 1, number = Inf,coef=4))
-
-plot_table_save(wthl.df)
-
-
-```
 
 
 

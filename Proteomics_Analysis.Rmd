@@ -1,0 +1,509 @@
+---
+title: "HFD - Proteo"
+output:
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE,warnings=F,error = F,include=T)
+
+library(ggplot2)
+library(ggforce)
+library(limma)
+library(dplyr)
+library(ggrepel)
+library(msigdbr)
+library(imputeLCMD)
+library(ggsci)
+library(org.Mm.eg.db)
+library(clusterProfiler)
+library(factoextra)
+library(emmeans)
+library(patchwork)
+library(pheatmap)
+library(brglm2)
+library(readxl)
+
+#Convenience function for plotting the volcano plot and saving the results
+plot_table_save = function(df){
+  df$Compound = rownames(df)
+  ix = match(df$Compound,data.wide$PG.ProteinNames)
+  df$PG.Genes = data.wide$PG.Genes[ix]
+  df$PG.ProteinDescriptions = data.wide$PG.ProteinDescriptions[ix]
+  df$Significant = ifelse(df$adj.P.Val<0.05,"Significant","NS")
+  df$label = ifelse(df$Significant == "NS","",df$Compound)
+  df$Direction = ifelse(df$logFC>0,"Up regulated","Down regulated")
+  df$Direction[df$Significant=="NS"] = "NS"
+  
+  volc = ggplot(df,aes(x=logFC,y=-log10(adj.P.Val),color=Direction)) + geom_point()+
+  theme_bw(16) +facet_wrap(~Contrast)+geom_text_repel(data = df[df$label!= "",] ,aes(label=Compound))+scale_color_manual(values = c("Up regulated"="red","Down regulated" = "darkgreen","NS = Grey")) + ggtitle(df$Contrast)
+
+  print(volc)
+  
+  ggsave(plot = volc,path=paste0(gsub("\\..*","", file)),filename = paste0(df$Contrast[1],"_volcano.png"),create.dir = T)
+  print("\n")
+
+knitr::kable(df[df$adj.P.Val<1,],row.names = F,digits = 4)
+
+  write.csv(df,file =paste0(gsub("\\..*","", file),"/",df$Contrast[1],"_results.csv") )  
+  
+}
+
+
+#Plots top 20 boxplots
+plot_differences = function(df){
+  plot.df = df
+plot.df$Diet = factor(plot.df$Diet,levels=c("Con.diet","HFD"))
+plot.df$Geno = factor(plot.df$Geno,levels=c("WT/WT","KI/KI"))
+  print(ggplot( plot.df,aes(x = Geno,y=value,color=Diet)) +geom_boxplot(position = position_dodge()) + facet_wrap(~variable,scales="free_y")+theme_bw(16)+scale_color_aaas()+ggtitle(title))
+
+  ggsave(path=paste0(gsub("\\..*","", file)),filename = paste0("","_top_boxplot.png"),create.dir = T)
+  
+}
+ 
+
+#Plots top 20 boxplots
+run_overrep = function(df){
+  ix = match(df$Compound,data.wide$PG.ProteinNames)
+  df$PG.Genes = data.wide$PG.Genes[ix]
+  sig.proteins = unique(df[df$adj.P.Val<0.05,]$PG.Genes)
+  if(length(sig.proteins) > 0 ){
+    universe.proteins = unique(df$PG.Genes)
+    universe.entrez = unique(na.omit(mapIds(org.Mm.eg.db, keys = universe.proteins,
+           column = "ENTREZID", keytype = "SYMBOL")))
+    sig.entrez = unique(na.omit(mapIds(org.Mm.eg.db, keys = sig.proteins,
+           column = "ENTREZID", keytype = "SYMBOL")))
+ 
+    enrich.wt = clusterProfiler::enrichGO(gene = sig.entrez, OrgDb = 'org.Mm.eg.db',keyType = "ENTREZID",universe=universe.entrez)
+    p1 = barplot(enrich.wt, showCategory=20) 
+    p2 = dotplot(enrich.wt, showCategory=20) 
+    enrich.wt.net <- DOSE::setReadable(enrich.wt, 'org.Mm.eg.db', 'ENTREZID')
+    p3 = cnetplot(enrich.wt.net, node_label="all") 
+    print(cowplot::plot_grid( p2 , p3,ncol=2,rel_widths=c(0.7,1)))
+    ggsave(path=paste0(gsub("\\..*","", file)),filename = paste0(df$Contrast[1],"_overrep_plots.png"),create.dir = T)
+
+    path=paste0(gsub("\\..*","", file),"/",df$Contrast[1],"_overrep_results.csv")
+    tmp.or = enrich.wt@result
+    write.csv(tmp.or,file=path)
+  } else {
+    return("Not enough DE Proteins")
+  } 
+}
+ 
+ 
+#Plots top 20 boxplots
+run_gsea = function(df){
+  ix = match(df$Compound,data.wide$PG.ProteinNames)
+  df$PG.Genes = data.wide$PG.Genes[ix]
+  proteins = df$PG.Genes
+ 
+  logFC <- df$logFC
+ 
+  names(logFC) <- proteins
+  logFC = logFC[!duplicated(names(logFC))]
+  logFC = logFC[!is.na(logFC)]
+  logFC <- sort(logFC, decreasing = T)
+  logFC = logFC[!is.na(names(logFC))]
+  gsea = gseGO(logFC,ont ="BP", 
+        keyType = "SYMBOL", 
+        OrgDb =  'org.Mm.eg.db',
+        pvalueCutoff = 0.2)
+
+ 
+  if(nrow(gsea@result) > 0){
+ 
+    p1 = enrichplot::dotplot(gsea, showCategory=20, split=".sign") + facet_grid(.~.sign)
+    enrich.net <- DOSE::setReadable(gsea, 'org.Mm.eg.db', 'SYMBOL')
+    p2 = cnetplot(enrich.net, node_label="all",foldChange=logFC) 
+    # p3 = ridgeplot(gsea)  
+    print(cowplot::plot_grid(p1, p2 ,ncol=3,rel_widths=c(0.7,1)))
+    ggsave(path=paste0(gsub("\\..*","", file)),filename = paste0(df$Contrast[1],"_gsea_plots.png"),create.dir = T)
+    path=paste0(gsub("\\..*","", file),"/",df$Contrast[1],"_gsea_results.csv")
+    tmp.gsea = gsea@result
+    write.csv(tmp.gsea,file=path)
+  } else {
+ 
+    return("No Enrichments with FDR < 0.2")
+  }
+}
+
+
+```
+
+
+# Section {.tabset}
+
+```{r, include=F}
+file = "~PC00064_YueMa_MouseLung_CompleteDataSet_Report_20240618_sent.xlsx"
+
+file= "~/bbc-secondary/research/MOOD_yue_MS_template_VBCS1110/PC00064_YueMa_MouseLung_CompleteDataSet_Report_20240618_sent.xlsx"
+## Please select the path to the data file you want to analyze
+data = read_excel(file)
+
+names = make.names(paste0(data$PG.ProteinNames),unique=T)
+data.wide = data
+data.wide$PG.ProteinNames = names
+data = as.data.frame(t(subset(data[,12:27])))
+colnames(data) =names
+data$Sample = rownames(data)
+
+
+# This line makes all of the compound variables numeric, sometimes they read in as characters
+data[,1:(ncol(data)-1)] <- sapply( data[,1:(ncol(data)-1)], as.numeric )
+
+Molecule = colnames(data)[1:(ncol(data)-1)]
+
+data$Geno_Diet =  sapply(strsplit(data$Sample,"_"), function(x) x[3])
+data$Geno = gsub("-.*","",data$Geno_Diet)
+data$Geno = factor(data$Geno,levels=c("wt","ki"),labels = c("WT/WT","KI/KI"))
+data$Diet = toupper(gsub(".*-","",gsub("-B.*","",data$Geno_Diet)))
+data$Diet = factor(data$Diet,levels=c("LFD","HFD"),labels=c("Con.diet","HFD"))
+
+
+table(data$Geno,data$Diet)
+
+data = subset(data, select= - c(Geno_Diet))
+
+
+```
+
+## Missingness {.tabset}
+
+Here we create a heatmap of missingness to see if it specific to any group of interest (Diet, Genotype). If there is any specificity, you would see very clear clustering blocks. If nothing shows up, there were no missing values
+
+
+```{r, fig.height = 9,fig.width=15}
+#Replace 0s with NA
+data[data==0]=NA
+
+miss.df = data
+rownames(miss.df) = miss.df$Sample
+miss.df = miss.df[,colnames(miss.df) %in% Molecule]
+miss.df[!is.na(miss.df)] = 1
+miss.df[is.na(miss.df)] = 0
+
+missing = apply(miss.df,2, function(x) sum(x)/length(x))
+anno = data.frame(Genotype = data$Geno,Diet = data$Diet)
+rownames(anno) = rownames(miss.df)
+
+if( length(which(missing<0.95)) > 0){
+  pheatmap(t(miss.df[,which(missing<0.95)
+  ]),color=c("white","black"),annotation_col = anno,show_rownames = F)
+}
+
+```
+
+
+### Testing for specificity
+
+
+```{r, include=F}
+
+miss.df$Geno = data$Geno
+miss.df$Diet = data$Diet
+colnames(miss.df) = make.names(colnames(miss.df))
+res.diet=NULL
+res.geno=NULL
+res.delta.delta=NULL
+# 
+# for(i in colnames(miss.df[,which(missing<0.95)])){
+#   
+#   f=as.formula(paste0(i,"~ Diet*Geno"))
+#   fit = glm(f, data = miss.df, family = "binomial", method = brglmFit)
+#   
+#   res.diet = rbind(res.diet,data.frame(Compound = i,summary(emmeans(fit,pairwise~Diet|Geno,adjust="none")$contrasts)))
+#   
+#   res.geno = rbind(res.geno,data.frame(Compound = i,summary(emmeans(fit,pairwise~Geno|Diet,adjust="none")$contrasts)))
+#   
+#   res.delta.delta = rbind(res.delta.delta,data.frame(Compound = i,joint_tests(fit)[3,]))
+#   res.delta.delta$model.term = "Delta - Delta"
+# 
+# }
+# 
+# 
+# res.geno$FDR = p.adjust(res.geno$p.value,method="BH")
+# 
+# res.diet$FDR = p.adjust(res.diet$p.value,method="BH")
+# 
+# res.delta.delta$FDR = p.adjust(res.delta.delta$p.value,method="BH")
+# 
+
+
+```
+
+
+```{r}
+
+# if(length(colnames(miss.df[,which(missing<0.95)]))>0){
+# 
+#   knitr::kable(res.diet[res.diet$FDR < 0.1,],caption="Compounds specific to a Diet")
+#   knitr::kable(res.geno[res.geno$FDR < 0.1,],caption="Compounds specific to a Genotype")
+#   knitr::kable(res.delta.delta[res.delta.delta$FDR < 0.1,],caption="Compounds specific to a Diet/Genotype Combo")
+# }
+
+
+```
+
+### Removed for too much missingness
+
+```{r}
+
+#These compounds are being removed for excessive missingness
+knitr::kable(names(missing[missing<0.7]))
+
+#drop heavily missing data (>30%)
+data = data[, ! colnames(data) %in% names(missing[missing<0.7])]
+
+```
+
+
+```{r}
+
+#impute
+data[,colnames(data) %in% Molecule] = t(imputeLCMD::impute.QRILC(log2(t(data[,colnames(data) %in% Molecule])))[[1]])
+
+
+```
+
+## Exploratory {.tabset}
+### PCA
+
+```{r, fig.height=6,fig.width=16}
+
+pc.plot = function(df){
+
+  pc = prcomp(data.matrix(df[,colnames(df) %in% Molecule]))
+
+  pc.df = as.data.frame(pc$x)
+  pc.df$Genotype = df$Geno
+  pc.df$Diet = df$Diet
+
+  p1 = ggplot(pc.df,aes(x=PC1,y=PC2,color = Diet,shape=Genotype, linetype=Genotype )) +
+    geom_point() +
+    geom_mark_ellipse() +
+    theme_bw(12) +
+    scale_color_nejm()
+
+  p2 = ggplot(pc.df,aes(x=PC3,y=PC4,color = Diet,shape=Genotype, linetype=Genotype )) +
+    geom_point() +
+    geom_mark_ellipse() +
+    theme_bw(12) +
+    scale_color_nejm()
+
+  p3 = ggplot(pc.df,aes(x=PC5,y=PC6,color = Diet,shape=Genotype, linetype=Genotype )) +
+    geom_point() +
+    geom_mark_ellipse() +
+    theme_bw(12) +
+    scale_color_nejm()
+
+  print(p1+p2+p3)
+
+}
+
+pc.d = pc.plot(data) 
+
+ggsave(pc.d,file=paste0(gsub("\\..*","", file),"/pc.tif"))
+
+
+```
+
+
+
+### Heatmap {.tabset}
+
+#### Pooled
+
+```{r, fig.width=9,fig.height=25}
+
+anno = data.frame(Genotype = data$Geno, data$Diet)
+rownames(anno) = data$Sample
+rownames(data) = data$Sample
+pheatmap(t((data[,colnames(data) %in% Molecule])),
+         annotation_col = anno,
+         scale="row",
+         color=colorRampPalette(c("blue","white","red"))(100),show_rownames = F)
+
+
+```
+
+
+## Differential Abundance {.tabset}
+
+### Pooled {.tabset}
+
+```{r, fig.height=14,fig.width=14}
+#We have to drop the slashes to make syntactically correct names
+data$Geno_Diet =  gsub(".*/","",paste0(data$Geno,"_",data$Diet))
+
+design = model.matrix(~ 0 + Geno_Diet , data= data)
+
+
+fit <- lmFit(t(data[,colnames(data) %in% Molecule]), design, robust = TRUE)
+
+
+cont2 = makeContrasts( Geno_DietKI_HFD - Geno_DietWT_HFD ,
+                       Geno_DietKI_Con.diet- Geno_DietWT_Con.diet,
+                       Geno_DietWT_HFD - Geno_DietWT_Con.diet,
+                       Geno_DietKI_HFD - Geno_DietKI_Con.diet,
+                       levels = design)
+
+set.seed(777)
+fit.cont <- contrasts.fit(fit, contrasts = cont2) 
+
+set.seed(777)
+ebayesf <- eBayes(fit.cont, robust = T, trend = T)
+
+tops.sig = topTable(ebayesf, adjust.method = "BH", p.value = 0.05, number = Inf)
+
+
+
+tops.all = topTable(ebayesf, adjust.method = "BH", p.value = 1, number = Inf)
+
+```
+
+#### HFD KI/KI - WT/WT
+
+```{r, fig.height=9,fig.width=9}
+
+hfd.df = data.frame(Contrast = "KI/KI HFD vs WT/WT HFD", topTable(ebayesf, adjust.method = "BH", p.value = 1, number = Inf,coef=1))
+hfd.df$Compound = rownames(hfd.df)
+hfd.df$Significant = ifelse(hfd.df$adj.P.Val<0.05,"Significant","NS")
+hfd.df$label = ifelse(hfd.df$Significant == "NS","",hfd.df$Compound)
+
+# ggplot(hfd.df,aes(x=logFC,y=-log10(P.Value),color=Significant)) + geom_point()+
+#   theme_bw(16) +facet_wrap(~Contrast)+geom_text_repel(data = hfd.df[hfd.df$label!= "",] ,aes(label=Compound))+scale_color_manual(values = c("NS"="black","Significant" = "red")) + ggtitle("HFD KI - WT")
+# 
+# knitr::kable(hfd.df[hfd.df$adj.P.Val<0.05,],row.names = F,digits = 4)
+
+plot_table_save(hfd.df)
+```
+
+##### Over representation
+
+```{r, fig.height=9,fig.width=25}
+
+run_overrep(hfd.df)
+
+```
+
+##### GSEA
+
+```{r, fig.height=9,fig.width=25}
+
+run_gsea(hfd.df)
+
+```
+
+#### Con.diet KI/KI - WT/WT
+
+```{r, fig.height=9,fig.width=9}
+
+Con.diet.df = data.frame(Contrast = "KI/KI Con.diet vs WT/WT Con.diet", topTable(ebayesf, adjust.method = "BH", p.value = 1, number = Inf,coef=2))
+Con.diet.df$Compound = rownames(Con.diet.df)
+Con.diet.df$Significant = ifelse(Con.diet.df$adj.P.Val<0.05,"Significant","NS")
+Con.diet.df$label = ifelse(Con.diet.df$Significant == "NS","",Con.diet.df$Compound)
+
+# ggplot(Con.diet.df,aes(x=logFC,y=-log10(P.Value),color=Significant)) + geom_point()+
+#   theme_bw(16) +facet_wrap(~Contrast)+geom_text_repel(data = Con.diet.df[Con.diet.df$label!= "",] ,aes(label=Compound))+scale_color_manual(values = c("NS"="black","Significant" = "red")) + ggtitle("Con.diet KI - WT")
+# 
+# knitr::kable(Con.diet.df[Con.diet.df$adj.P.Val<0.05,],row.names = F,digits = 4)
+
+plot_table_save(Con.diet.df)
+```
+
+
+##### Over representation
+
+```{r, fig.height=9,fig.width=25}
+
+run_overrep(Con.diet.df)
+
+```
+
+##### GSEA
+
+```{r, fig.height=9,fig.width=25}
+
+run_gsea(Con.diet.df)
+
+```
+
+#### WT/WT HFD - Con.diet
+
+```{r, fig.height=9,fig.width=9}
+
+wt.df = data.frame(Contrast = "WT/WT hfd vs WT/WT/WT Con.diet", topTable(ebayesf, adjust.method = "BH", p.value = 1, number = Inf,coef=3))
+wt.df$Compound = rownames(wt.df)
+wt.df$Significant = ifelse(wt.df$adj.P.Val<0.05,"Significant","NS")
+wt.df$label = ifelse(wt.df$Significant == "NS","",wt.df$Compound)
+
+plot_table_save(wt.df)
+```
+
+
+##### Over representation
+
+```{r, fig.height=9,fig.width=25}
+
+run_overrep(wt.df)
+
+```
+
+##### GSEA
+
+```{r, fig.height=9,fig.width=25}
+
+run_gsea(wt.df)
+
+```
+
+
+#### KI/KI HFD - Con.diet
+
+```{r, fig.height=9,fig.width=9}
+
+ki.df = data.frame(Contrast = "KI/KI hfd vs KI/KI Con.diet", topTable(ebayesf, adjust.method = "BH", p.value = 1, number = Inf,coef=4))
+ki.df$Compound = rownames(ki.df)
+ki.df$Significant = ifelse(ki.df$adj.P.Val<0.05,"Significant","NS")
+ki.df$label = ifelse(ki.df$Significant == "NS","",ki.df$Compound)
+# 
+# ggplot(Con.diet.df,aes(x=logFC,y=-log10(P.Value),color=Significant)) + geom_point()+
+#   theme_bw(16) +facet_wrap(~Contrast)+geom_text_repel(data = Con.diet.df[Con.diet.df$label!= "",] ,aes(label=Compound))+scale_color_manual(values = c("NS"="black","Significant" = "red")) + ggtitle("KI HFD - Con.diet")
+# 
+# knitr::kable(Con.diet.df[Con.diet.df$adj.P.Val<0.05,],row.names = F,digits = 4)
+
+plot_table_save(ki.df)
+
+```
+
+
+##### Over representation
+
+```{r, fig.height=9,fig.width=25}
+
+run_overrep(ki.df)
+
+```
+
+##### GSEA
+
+```{r, fig.height=9,fig.width=25}
+
+run_gsea(ki.df)
+
+```
+
+#### Boxplots Top Compounds
+
+```{r, fig.height=12,fig.width=16}
+
+
+  plot.df = reshape2::melt(data[,colnames(data) %in% c("Geno","Diet",rownames(tops.all)[1:20])],id.vars=c("Geno","Diet"))
+  title = "Boxplots of Compounds with largest differences"
+
+plot_differences(plot.df) 
+
+
+```
+
