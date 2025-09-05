@@ -1,0 +1,267 @@
+---
+title: "Enrichment analysis"
+author: "Daisy Fu"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  html_document:
+    code_folding: hide
+    self_contained: yes
+    toc: true
+    toc_depth: 5
+    toc_float:
+      collapsed: true
+      smooth_scroll: false
+    number_sections: true
+---
+
+# Background
+
+JIRA ticket number: VBCS-1202. This is rerun for only 4 comparisons. 
+
+GO-BP, KEGG, four custom pathways, and reactome will be analyzed. 
+
+
+Steps in the analysis:  
+
+1. Import DE gene results
+
+2. Run GSEA on GO_BP and KEGG
+
+3. Plotting: dotplots for all.
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, warning=F, message=F, cache=F)
+```
+
+# Load packages
+
+
+```{r load_libs, echo=TRUE, warning=F, message=F, cache=FALSE}
+
+if (!"/varidata/research/projects/bbc/tools/Fu_R_4.4_ondemond_lib" %in% .libPaths()) {
+  current_pathes <- .libPaths()
+  .libPaths(c("/varidata/research/projects/bbc/tools/Fu_R_4.4_ondemond_lib", current_pathes))
+}
+
+orgdb <- "org.Mm.eg.db" 
+
+set.seed(4321)
+
+library(orgdb, character.only=TRUE)
+library(SummarizedExperiment)
+library(enrichplot)
+library(tidyverse)
+library(edgeR)
+library(clusterProfiler)
+library(msigdb)
+library(cowplot)
+library(readxl)
+library(ReactomePA)
+
+```
+
+# Import DE results
+
+
+```{r import_data}
+
+# dir <- ("../rnaseq_workflow/results/")
+
+dir.create("data_save_RDS")
+dir.create("gsea_data")
+dir.create("gsea_res")
+
+pvalue = 1
+
+# import custom gene sets:
+list.files("../more_enrich_Mar_2025/from_client/")
+canonical_senesce <- read_tsv("../more_enrich_Mar_2025/from_client/0_1 Canonical Senesce Pathway.txt") |>
+  pull(pathway)
+senescence_initiators <- read_tsv("../more_enrich_Mar_2025/from_client/0_2 Senescence Initiators.txt") |>
+  pull(pathway)
+senescence_response <- read_tsv("../more_enrich_Mar_2025/from_client/0_3 Senescence Responses.txt") |>
+  pull(pathway)
+senMayo_gene_mouse <- read_xlsx("../more_enrich_Mar_2025/from_client/SenMayo gene list 41467_2022_32552_MOESM4_ESM.xlsx", sheet = "mouse") |>
+  pull( "Gene(murine)" )
+
+gs_list <- list(canonical_senesce= canonical_senesce, 
+                senescence_initiators = senescence_initiators, 
+                senescence_response = senescence_response, 
+               senMayo_gene_mouse = senMayo_gene_mouse )
+
+custom_gs_dataset <- lapply(seq_along(gs_list), function(index) {
+  df <- data.frame(gs_name = rep(names(gs_list)[index], length(gs_list[[index]])),
+                   entrez_gene = unlist(gs_list[[index]]))
+})
+
+custom_gs_dataset_df <-  do.call(rbind.data.frame, custom_gs_dataset)
+
+
+### ---- import DE gene results
+
+read_DE_res_run_enrichment <- function(res_df = res_df, save_name = save_name) {
+
+  gene_list <- sign(res_df$logFC) * (-log10(res_df$PValue))
+
+  names(gene_list) <- res_df$entrez ## the names of the gene list is the entreze ID.
+
+  if(any(is.na(gene_list))){
+    gene_list = gene_list[-which(is.na(gene_list))]
+  }
+  if(any(is.na(names(gene_list)))) {
+    gene_list = gene_list[-which(is.na(names(gene_list)))]
+  }
+
+  gene_list <- gene_list[!duplicated(names(gene_list))]
+
+  gene_list <- sort(gene_list, decreasing = TRUE)
+
+
+##### ----- run GO_BP first
+## make sure the sorted/ranked comparison were in a list with names of comparisons.
+
+  res_GOBP <-  gseGO(gene_list,
+    OrgDb = org.Mm.eg.db,
+    ont          = "BP",
+    minGSSize    = 50,
+    maxGSSize    = 500,
+    pvalueCutoff = 0.05,
+    verbose      = FALSE)
+  
+  y <- setReadable(res_GOBP, OrgDb = org.Mm.eg.db, keyType="ENTREZID")
+  
+  saveRDS(y, file = paste0("gsea_data/", save_name, "_gseGO_BP.rds"))
+  write_tsv(y %>% data.frame(), file = paste0("gsea_res/", save_name, "_gseGO_BP.tsv"))
+  
+ 
+   ### next, run KEGG. 
+  kk <- gseKEGG(geneList     = gene_list,
+               organism     = 'mmu',
+               minGSSize    = 50,
+               pvalueCutoff = 0.05,
+               verbose      = FALSE)
+
+  z <- setReadable(kk, OrgDb = org.Mm.eg.db, keyType = "ENTREZID")
+  
+  saveRDS(z, file = paste0("gsea_data/", save_name, "_KEGG.rds"))
+  write_tsv(z %>% data.frame(), file = paste0("gsea_res/", save_name, "_KEGG.tsv"))
+  
+  ## run reactome
+  reactome_obj <- gsePathway(gene_list, 
+                pvalueCutoff = 0.05,
+                pAdjustMethod = "BH", 
+                organism = "mouse",
+                verbose = FALSE)
+  
+  reactome_obj <- setReadable(reactome_obj, OrgDb = org.Mm.eg.db, keyType = "ENTREZID")
+  saveRDS(reactome_obj, file = paste0("gsea_data/", save_name, "_reactome.rds"))
+  write_tsv(reactome_obj %>% data.frame(), file = paste0("gsea_res/", save_name, "_reactome.tsv"))
+  
+  
+  # lastly, run gsea on the custom gene sets. 
+  
+  # we need to recreate a gene list with symbols
+  gene_list_symbol <- sign(res_df$logFC) * (-log10(res_df$PValue))
+
+  names(gene_list_symbol) <- res_df$Symbol ## the names of the gene list is the entreze ID.
+
+  if(any(is.na(gene_list_symbol))){
+    gene_list_symbol = gene_list_symbol[-which(is.na(gene_list_symbol))]
+  }
+  if(any(is.na(names(gene_list_symbol)))) {
+    gene_list_symbol = gene_list_symbol[-which(is.na(names(gene_list_symbol)))]
+  }
+
+  gene_list_symbol <- gene_list_symbol[!duplicated(names(gene_list_symbol))]
+
+  gene_list_symbol <- sort(gene_list_symbol, decreasing = TRUE)
+  
+  gsea_custom <- GSEA(gene_list_symbol, TERM2GENE = custom_gs_dataset_df, pvalueCutoff = pvalue, eps = 0, minGSSize = 15, nPermSimple = 10000)
+  
+  write_rds(gsea_custom, file = paste0("gsea_data/", save_name, "_custom_gene_sets", ".rds"))
+  gsea_export <- gsea_custom %>% as.data.frame()
+  write_tsv(gsea_export, file = paste0("gsea_res/", save_name, "_custom_gene_sets.tsv"))
+
+
+  ## then do some plotting
+  print(dotplot(gsea_custom, showCategory=20, split = ".sign", font.size = 10) + facet_grid(~.sign) +
+            scale_y_discrete(labels=function(x) str_wrap(x, width=60)) +
+        ggtitle(paste0("dotplot for gene set enrichment of four custom gene sets ", save_name)))
+        
+          
+  ## then do some plotting
+  print(dotplot(res_GOBP, showCategory=20, split = ".sign", font.size = 9) + facet_grid(~.sign) +
+            scale_y_discrete(labels=function(x) str_wrap(x, width=60)) +
+        ggtitle(paste0("dotplot for gene set enrichment of GO_BP - ", save_name)))
+        
+        
+  print(dotplot(kk, showCategory=20, split = ".sign", font.size = 9) + facet_grid(~.sign) +
+            scale_y_discrete(labels=function(x) str_wrap(x, width=60)) +
+        ggtitle(paste0("dotplot for gene set enrichment of KEGG - ", save_name)))
+  
+   print(dotplot(reactome_obj, showCategory=20, split = ".sign", font.size = 9) + facet_grid(~.sign) +
+            scale_y_discrete(labels=function(x) str_wrap(x, width=60)) +
+        ggtitle(paste0("dotplot for gene set enrichment of REACTOME - ", save_name)))
+          
+}
+
+```
+
+# run enrichment and plotting
+
+
+## within KI, high vs. low fat diet
+
+KI_HFD-KI_Con.diet
+
+
+
+```{r comp1, fig.height= 8, fig.width=10, fig.align = 'center' }
+
+contrasts_list <- list("KI_HFD-KI_Con.diet",
+                       "KI_HFD-WT_HFD",
+                       "KI_Con.diet-WT_Con.diet",
+                       "WT_HFD-WT_Con.diet")
+
+contrasts_list <- set_names(contrasts_list, nm = contrasts_list)
+
+read_DE_res_run_enrichment(res_df = read_tsv(paste0("res/edgeR_", contrasts_list[[1]], "_DE_results.tsv")), 
+                           save_name = contrasts_list[[1]])
+
+
+```
+
+## within HFD, KI vs. WT
+
+KI_HFD-WT_HFD
+
+```{r comp2, fig.height= 8, fig.width=10, fig.align = 'center'}
+
+read_DE_res_run_enrichment(res_df = read_tsv(paste0("res/edgeR_", contrasts_list[[2]], "_DE_results.tsv")), 
+                           save_name = contrasts_list[[2]])
+                           
+                           
+```
+
+## within Con.diet, KI vs. WT
+
+KI_Con.diet-WT_Con.diet
+
+```{r comp3, fig.height= 8, fig.width=10, fig.align = 'center'}
+
+read_DE_res_run_enrichment(res_df = read_tsv(paste0("res/edgeR_", contrasts_list[[3]], "_DE_results.tsv")), 
+                           save_name = contrasts_list[[3]])
+```
+
+## within WT, high vs. low fat diet.
+
+WT_HFD-WT_Con.diet
+                   
+```{r comp4, fig.height= 8, fig.width=10, fig.align = 'center'}
+
+read_DE_res_run_enrichment(res_df = read_tsv(paste0("res/edgeR_", contrasts_list[[4]], "_DE_results.tsv")), 
+                           save_name = contrasts_list[[4]])
+```
+
