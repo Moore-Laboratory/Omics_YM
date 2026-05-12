@@ -1,0 +1,17 @@
+sample_id,subject_id,source_sample_id,replicate,replicate_count,repeated_sample,batch,organism,tissue,assay_type,condition_id,organism_ontology_term_id,age_at_collection
+B443 s,B443 s,B443 s,Rep1,1,0,1,Mouse,Brain,RNAseq,  KI/KI_Control diet,10090,519
+B452 s,B452 s,B452 s,Rep1,1,0,1,Mouse,Brain,RNAseq,  KI/KI_HFD,10090,508
+B457 s,B457 s,B457 s,Rep2,1,0,1,Mouse,Brain,RNAseq,  KI/KI_HFD,10090,508
+B459 s,B459 s,B459 s,Rep1,1,0,1,Mouse,Brain,RNAseq,  WT/WT_HFD,10090,508
+B462 s,B462 s,B462 s,Rep3,1,0,1,Mouse,Brain,RNAseq,  KI/KI_HFD,10090,507
+B467 s,B467 s,B467 s,Rep1,1,0,1,Mouse,Brain,RNAseq,  WT/WT_Control diet,10090,511
+B468 s,B468 s,B468 s,Rep2,1,0,1,Mouse,Brain,RNAseq,  WT/WT_Control diet,10090,511
+B474 s,B474 s,B474 s,Rep2,1,0,1,Mouse,Brain,RNAseq,  KI/KI_Control diet,10090,511
+B479 s,B479 s,B479 s,Rep2,1,0,1,Mouse,Brain,RNAseq,  WT/WT_HFD,10090,506
+B511 s,B511 s,B511 s,Rep3,1,0,1,Mouse,Brain,RNAseq,  WT/WT_Control diet,10090,473
+B535 s,B535 s,B535 s,Rep3,1,0,1,Mouse,Brain,RNAseq,  KI/KI_Control diet,10090,464
+B546 s,B546 s,B546 s,Rep3,1,0,1,Mouse,Brain,RNAseq,  WT/WT_HFD,10090,450
+B554 s,B554 s,B554 s,Rep4,1,0,1,Mouse,Brain,RNAseq,  WT/WT_Control diet,10090,443
+B555 s,B555 s,B555 s,Rep4,1,0,1,Mouse,Brain,RNAseq,  KI/KI_Control diet,10090,444
+B557 s,B557 s,B557 s,Rep4,1,0,1,Mouse,Brain,RNAseq,  KI/KI_HFD,10090,442
+B558 s,B558 s,B558 s,Rep4,1,0,1,Mouse,Brain,RNAseq,  WT/WT_HFD,10090,443

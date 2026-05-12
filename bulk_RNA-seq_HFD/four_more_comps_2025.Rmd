@@ -29,11 +29,6 @@ knitr::opts_chunk$set(echo=TRUE, warning=F, message=F, cache=F)
 
 ```{r load_libs, echo=TRUE, warning=F, message=F, cache=FALSE}
 
-if (!"/varidata/research/projects/bbc/tools/Fu_R_4.4_ondemond_lib" %in% .libPaths()) {
-  current_pathes <- .libPaths()
-  .libPaths(c("/varidata/research/projects/bbc/tools/Fu_R_4.4_ondemond_lib", current_pathes))
-}
-
 orgdb <- "org.Mm.eg.db" 
 FDR_thresh <- 0.1
 
@@ -67,37 +62,9 @@ dir.create("res")
 
 dir.create("data_save")
 
-
-# read in couts -----------------------------------------------------------
-files <- list.files("../rnaseq_workflow/results/star/", pattern = "ReadsPerGene.out.tab", full.names = FALSE)
-names(files) <- str_remove_all(files, ".ReadsPerGene.out.tab$")
-
-salmon_lib_files <- list.files("../rnaseq_workflow/results/salmon/", pattern = "lib_format_counts.json", recursive=TRUE, full.names = TRUE)
-lib_types <- unlist(lapply(salmon_lib_files, function(x) fromJSON(file=x)$expected_format))
-lib_type <- unique(lib_types)
-
-if(length(lib_type) > 1){
-  stop("More than 1 library type detected.")
-}
-
-if(!lib_type %in% c("ISR", "SR", "ISF", "SF", "IU", "U")){
-  stop("Unknown library type detected.")
-}
-
-
-counts_col <- case_when(
-  lib_type %in% c("ISR", "SR") ~ 4,
-  lib_type %in% c("ISF", "SF") ~ 3,
-  lib_type %in% c("IU", "U") ~ 2,
-  .default=999
-)
-stopifnot(counts_col %in% c(2, 3, 4))
-
-dge <- edgeR::readDGE(files, path = "../rnaseq_workflow/results/star/", columns = c(1, counts_col), 
-                      skip = 4, labels = names(files), header=FALSE)
-
-raw_cts <- edgeR::getCounts(dge)
-names(attributes(raw_cts)$dimnames) <- NULL
+## read raw count file, which should be in the same dir as this Rmd. 
+raw_cts <- read_tsv("raw_cts.tsv") |>
+  column_to_rownames("ensembl_id")
 
 # follow the previous R markdown ------------------------------------------
 ensembl_ids <- str_split_fixed(rownames(raw_cts), "\\.", 2)[, 1]
@@ -120,12 +87,14 @@ gene_names_df$entrez <- AnnotationDbi::mapIds(eval(as.name(orgdb)), rownames(gen
                                               multiVals="first") # there are duplicates in here.
 
 
-meta_df <- read_excel("../meta file.xlsx") %>% 
-  select(c("sample_ID", "Genotype", "Diet", "Sex")) %>%
-  mutate(sample_ID =  gsub(" ", "", sample_ID)) 
-meta_df$Genotype <- str_split_fixed(meta_df$Genotype, "\\/", 2)[, 1] 
-meta_df <- meta_df %>%
-  mutate(Geno_diet = paste0(Genotype, "_", Diet))
+### read in the meta information, which come with the manuscript (meta_brain), which are also included in the repo dir. 
+# it should have 16 samples. 
+meta_df <- read_csv("SAMPlE.csv") |> 
+  rename(Geno_diet = condition_id) |>
+  mutate(sample_id = gsub(" ", "", sample_id)) |>
+  column_to_rownames("sample_id")
+
+meta_df <- meta_df[colnames(raw_cts), ]
 
 print(meta_df)
 
@@ -167,7 +136,7 @@ dds = DESeqDataSetFromMatrix(countData = raw_cts,
 dim(dds)
 
 vsdata <- vst(dds, blind=FALSE)
-pca <- plotPCA(vsdata, intgroup=c("Diet", "Genotype", "Sex", "Geno_diet"), returnData = T)
+pca <- plotPCA(vsdata, intgroup=c("Geno_diet"), returnData = T)
 percentVar <- round(100 * attr(pca, "percentVar"))
 
 
